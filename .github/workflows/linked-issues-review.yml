@@ -1,0 +1,120 @@
+
+name: Move Linked Issues to In Review
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  move-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update linked issues
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = context.issue.number;
+
+            const query = `
+              query($owner: String!, $repo: String!, $pr: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $pr) {
+                    closingIssuesReferences(first: 100) {
+                      nodes {
+                        id
+                        number
+                        state
+                        projectItems(first: 100) {
+                          nodes {
+                            id
+                            project {
+                              number
+                              owner {
+                                ... on User { login }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            const data = await github.graphql(query, {
+              owner, repo, pr: prNumber
+            });
+
+            const issues = data.repository.pullRequest
+              .closingIssuesReferences.nodes;
+
+            const projectNumber = 1;
+            const projectOwner = owner;
+
+            const projectData = await github.graphql(`
+              query($login: String!, $number: Int!) {
+                user(login: $login) {
+                  projectV2(number: $number) {
+                    id
+                    field(name: "Status") {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        options { id name }
+                      }
+                    }
+                  }
+                }
+              }
+            `, { login: projectOwner, number: projectNumber });
+
+            const project = projectData.user.projectV2;
+            const status = project.field.options
+              .find(option => option.name === "In Review");
+
+            if (!status) {
+              throw new Error("In Review status not found");
+            }
+
+            for (const issue of issues) {
+              if (issue.state !== "OPEN") continue;
+
+              const item = issue.projectItems.nodes.find(
+                item => item.project.number === projectNumber &&
+                  item.project.owner?.login === projectOwner
+              );
+
+              if (!item) {
+                core.warning(`Issue #${issue.number} is not in the Project`);
+                continue;
+              }
+
+              await github.graphql(`
+                mutation($project: ID!, $item: ID!,
+                         $field: ID!, $option: String!) {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: $project
+                    itemId: $item
+                    fieldId: $field
+                    value: { singleSelectOptionId: $option }
+                  }) {
+                    projectV2Item { id }
+                  }
+                }
+              `, {
+                project: project.id,
+                item: item.id,
+                field: project.field.id,
+                option: status.id
+              });
+
+              core.info(`Moved issue #${issue.number} to In Review`);
+            }
