@@ -47,6 +47,40 @@
                 </li>
             </ul>
         </section>
+        
+<section>
+    <h2>Open an Input File</h2>
+    <p>Select a text file to open.</p>
+
+    <input type="file" id="inputFile" accept=".txt">
+    <button type="button" onclick="openFile()">Open File</button>
+    <p id="fileMessage" role="status"></p>
+</section>
+
+<script>
+    async function openFile() {
+        const input = document.getElementById("inputFile");
+        const message = document.getElementById("fileMessage");
+        const file = input.files[0];
+
+        if (!file) {
+            message.textContent =
+                "Please select a file and try again.";
+            return;
+        }
+
+        try {
+            await file.text();
+            message.textContent =
+                "File opened successfully: " + file.name;
+        } catch (error) {
+            message.textContent =
+                "Unable to read the file. Please select another file and try again.";
+            input.value = "";
+        }
+    }
+</script>
+
     </main>
 </body>
 </html>
